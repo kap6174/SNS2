@@ -1,0 +1,8 @@
+PHASE 1:
+
+Both doctor and patient generates the p, g, y, x at their end and send to each other.
+The doctor then generates a session key randomly and uses the patient's public key to encrypt using elgamals algorithm and then sends c1, c2 to the patient.
+The patient upon receving this c1, c2 decrypts using his own private key x using the elgamals decryption algorithm. Now both the doctor and patient have agreed upon the session key which we will use for AES encryption for the actual messages when sent!
+
+PHASE2:
+
