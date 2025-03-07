@@ -8,8 +8,8 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from math import gcd
 import argparse
 import threading
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
+from Cryptodome.Cipher import AES
+from Cryptodome.Util.Padding import pad, unpad
 import utils
 
 SERVER_HOST = '127.0.0.1'
