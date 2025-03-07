@@ -19,7 +19,6 @@ active_patients = {}
 patients_lock = threading.Lock()
 
 
-
 def generate_elgamal_keys():
     p, g = utils.get_prime_and_generator()
     x = random.randint(2, p - 2) 
@@ -47,8 +46,6 @@ def decrypt_session_key(cipher_msg, private_key, p):
     
     return session_key
 
-
-
 def sign_data(data, private_key, public_key):
     p, g, y = public_key
     hash_value = int(hashlib.sha256(data.encode()).hexdigest(), 16) % (p-1)
@@ -58,8 +55,6 @@ def sign_data(data, private_key, public_key):
     s = (k_inv * (hash_value - private_key * r) % (p-1)) % (p-1)
     
     return (r, s)
-
-
 
 def verification(dataToVerify, public_key, sgndata):
     p, g, y = public_key
@@ -72,9 +67,6 @@ def verification(dataToVerify, public_key, sgndata):
     hash_value = int(hashlib.sha256(dataToVerify.encode()).hexdigest(), 16) % (p-1)
     left_side = pow(g, hash_value, p)
     right_side = (pow(y, sig_r, p) * pow(sig_r, sig_s, p)) % p
-    
-    #print(f"Hash: {hash_value}, g^hash mod p: {left_side}, y^r * r^s mod p: {right_side}")
-    #print(f"p: {p}, g: {g}, y: {y}, r: {sig_r}, s: {sig_s}")
     
     return left_side == right_side
 
@@ -247,7 +239,7 @@ def handle_patient(patient_socket, addr, doctor_public_key, doctor_private_key, 
             response = f"10,{TS_GWN},{RN_GWN},{id},{re_encrypted_key[0]},{re_encrypted_key[1]},{doctor_signature[0]},{doctor_signature[1]}"
             patient_socket.send(response.encode())
             print(f"[{utils.get_timestamp()}] Sent authentication response to patient {patient_id}")
-            #ACTUALLY THE PLACE WHERE OPCODE 10 SHOULD BE AS PER THE PATIENT CODE. 
+            print("OPCODE 10 : KEY_VERIFICATION (SUCCESS")
             verification_msg = patient_socket.recv(4096).decode()
             verification_parts = verification_msg.split(',')
 

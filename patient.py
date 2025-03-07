@@ -44,41 +44,25 @@ def encrypt_session_key(msg, key): #T
     return c1, c2
 
 def decrypt_with_aes(encrypted_payload, key):
-    """
-    Decrypt data that was encrypted using AES-CBC with the provided key.
-    
-    Parameters:
-    encrypted_payload (str): Base64 encoded string containing IV + encrypted data
-    key (int/str/bytes): The decryption key
-    
-    Returns:
-    str: Decrypted data as a string
-    """
     try:
-        # Convert key to bytes if needed
         if isinstance(key, int):
             key_bytes = key.to_bytes(32, byteorder='big')
         elif isinstance(key, str):
             key_bytes = hashlib.sha256(key.encode()).digest()
         else:
-            # Assume it's already bytes
             key_bytes = key
             
-        # Decode base64 payload
         decoded_payload = base64.b64decode(encrypted_payload)
         
-        # Extract IV (first 16 bytes) and ciphertext
         iv = decoded_payload[:16]
         ciphertext = decoded_payload[16:]
         
-        # Create cipher and decrypt
         cipher = AES.new(key_bytes, AES.MODE_CBC, iv)
         decrypted_padded = cipher.decrypt(ciphertext)
         
-        # Unpad and return as string
         decrypted_data = unpad(decrypted_padded, AES.block_size)
-        
         return decrypted_data.decode('utf-8')
+    
     except Exception as e:
         print(f"Decryption error: {e}")
         return None
@@ -163,7 +147,7 @@ def receive_messages(patient_socket, session_key, doctor_id, patient_id, doctor_
                     except Exception as e:
                         print(f"[{utils.get_timestamp()}] Error processing group key: {e}")
                 
-                
+
                 elif opcode == "40":  # ENCRYPTED MESSAGE
                     if not group_key:
                         print(f"[{utils.get_timestamp()}] Received encrypted message but no group key available")
@@ -178,41 +162,20 @@ def receive_messages(patient_socket, session_key, doctor_id, patient_id, doctor_
                         print(f"[{utils.get_timestamp()}] Message timestamp too old, discarding")
                         continue
                     
-                    try:
-                        if isinstance(group_key, int):
-                            key_bytes = group_key.to_bytes(32, byteorder='big')
-                        elif isinstance(group_key, str):
-                            key_bytes = bytes.fromhex(group_key) if len(group_key) == 64 else hashlib.sha256(group_key.encode()).digest()
-                        else:
-                            key_bytes = group_key
-                        
-                        encrypted_data = base64.b64decode(encrypted_payload)
-                        
-                        iv = encrypted_data[:16]
-                        ciphertext = encrypted_data[16:]
-                        
-                        cipher = AES.new(key_bytes, AES.MODE_CBC, iv)
-                        
-                        decrypted_data = unpad(cipher.decrypt(ciphertext), AES.block_size)
-                        
-                        decrypted_message = decrypted_data.decode('utf-8')
-                        
-                        message_parts = decrypted_message.split(',', 2)
-                        message_ts = int(message_parts[0])
-                        message_sender = message_parts[1]
-                        actual_message = message_parts[2]
-                        
-                        if message_ts != ts or message_sender != sender_id:
-                            print(f"[{utils.get_timestamp()}] Message verification failed: timestamp or sender mismatch")
-                            continue
-                        
-                        print(f"[{utils.get_timestamp()}] Received broadcast message from Doctor {sender_id}")
-                        print(f"[{utils.get_timestamp()}] Decrypted message: {actual_message}")
-                        print("OPCODE 50 : DEC MSG")
-                        print(f"[{utils.get_timestamp()}] Message received and verified")
                     
-                    except Exception as e:
-                        print(f"[{utils.get_timestamp()}] Error decrypting message: {e}")
+                    decrypted_message = decrypt_with_aes(encrypted_payload, group_key)
+                    message_parts = decrypted_message.split(',', 2)
+                    message_ts = int(message_parts[0])
+                    message_sender = message_parts[1]
+                    actual_message = message_parts[2]
+                        
+                    if message_ts != ts or message_sender != sender_id:
+                        print(f"[{utils.get_timestamp()}] Message verification failed: timestamp or sender mismatch")
+                        continue
+                        
+                    print(f"[{utils.get_timestamp()}] Received broadcast message from Doctor {sender_id}")
+                    print(f"[{utils.get_timestamp()}] Decrypted message: {actual_message}")
+                    print("OPCODE 50 : DEC MSG")
                 
                 elif opcode == "60": 
                     print("OPCODE 60 : DISCONNECT")
@@ -244,8 +207,6 @@ def main(patient_id, doctor_id):
         
         patient_public_key, patient_private_key = generate_elgamal_keys()
         p, g, y = patient_public_key
-        #print(f"[{utils.get_timestamp()}] Generated keys - Public Key: \np={p} \ng={g} \ny={y}")
-        #print(f"[{utils.get_timestamp()}] Private Key: \n{patient_private_key}")
 
         patient_socket.send(f"{p},{g},{y},{patient_id}".encode())
         
@@ -372,10 +333,10 @@ def main(patient_id, doctor_id):
         print(f"[{utils.get_timestamp()}] Patient client terminated")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Telemedical Patient Client')
-    parser.add_argument('--patient_id', type=int, default=101, help='Patient ID (default: 101)')
-    parser.add_argument('--doctor_id', type=str, default="1", help='Doctor ID (default: 1)')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--id', type=int, default=101)
+    parser.add_argument('--doctor_id', type=str, default="1")
     
     args = parser.parse_args()
     
-    main(args.patient_id, args.doctor_id)
+    main(args.id, args.doctor_id)
