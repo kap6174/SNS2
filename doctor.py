@@ -1,53 +1,39 @@
+import base64
 import socket
 import threading
-import datetime
 import random
 import os
 import time
-from math import gcd
 import hashlib
-from cryptography.hazmat.primitives.asymmetric import dh
 import argparse
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+import utils
 
 HOST = '127.0.0.1'
 PORT = 9000
+TIMESTAMP_TOLERANCE = 5
 
-# Store session keys for each patient
 patient_session_keys = {}
+active_patients = {}
+patients_lock = threading.Lock()
 
-# Generate a large prime p and find a generator g in Z*_p
-def generate_prime_and_generator():
-    parameters = dh.generate_parameters(generator=2, key_size=512)
-    p = parameters.parameter_numbers().p  # Large prime
-    g = find_generator(p)  # Find a valid generator g
-    return p, g
 
-# Find a valid generator g in Z*_p
-def find_generator(p):
-    for g in range(2, p - 1):
-        if pow(g, (p - 1) // 2, p) != 1:  # Basic check for primitive root
-            return g
-    return 2  # Fallback
 
-# Generate ElGamal key pair (p, g, y) and private key x
 def generate_elgamal_keys():
-    p, g = generate_prime_and_generator()
-    x = random.randint(2, p - 2)  # Private key
-    y = pow(g, x, p)  # Public key
+    p, g = utils.get_prime_and_generator()
+    x = random.randint(2, p - 2) 
+    y = pow(g, x, p) 
     return (p, g, y), x  # Public key tuple (p, g, y) and private key x
 
-# Encrypt session key using patient's public key
-def encrypt_session_key(msg, public_key):
-    p, g, y = public_key
-    
-    # Convert message to integer if it's bytes
+def encrypt_session_key(msg, patient_public_key):
+    p, g, y = patient_public_key
     if isinstance(msg, bytes):
         msg = int.from_bytes(msg, byteorder='big')
     
-    # Choose a random ephemeral key k
+    # Choose a random ephemeral key. 1 and p-1 are edge cases and guessed first. So excluding them.
     k = random.randint(2, p - 2)
     
-    # Compute ciphertext
     c1 = pow(g, k, p)
     c2 = (msg * pow(y, k, p)) % p
     
@@ -55,100 +41,167 @@ def encrypt_session_key(msg, public_key):
 
 def decrypt_session_key(cipher_msg, private_key, p):
     c1, c2 = cipher_msg
-    
-    # Compute s = c1^x mod p
     s = pow(c1, private_key, p)
-    
-    # Compute s^(-1) mod p (modular inverse)
-    s_inv = pow(s, p - 2, p)  # Using Fermat's little theorem for modular inverse
-    
-    # Recover the session key
+    s_inv = pow(s, p - 2, p)
     session_key = (c2 * s_inv) % p
     
     return session_key
 
-def get_timestamp():
-    return datetime.datetime.now().strftime("%H:%M:%S")
+
 
 def sign_data(data, private_key, public_key):
     p, g, y = public_key
-    
-    # Calculate hash
     hash_value = int(hashlib.sha256(data.encode()).hexdigest(), 16) % (p-1)
-    print(f"Hash (patient): {hash_value}")
-    
-    # Choose a random k that is coprime to p-1
-    k = find_coprime(p-1)
-    
-    # Calculate r = g^k mod p
+    k = utils.find_coprime(p-1)   # Choose a random k that is coprime to p-1
     r = pow(g, k, p)
-    
-    # Calculate s = k^-1 * (hash - x*r) mod (p-1)
-    k_inv = pow(k, -1, p-1)  # Using Python 3.8+ m  odular inverse calculation
+    k_inv = pow(k, -1, p-1)
     s = (k_inv * (hash_value - private_key * r) % (p-1)) % (p-1)
     
     return (r, s)
 
-def find_coprime(n):
-    while True:
-        k = random.randint(2, n-1)  
-        if gcd(k, n) == 1:
-            return k
+
 
 def verification(dataToVerify, public_key, sgndata):
     p, g, y = public_key
     sig_r, sig_s = sgndata
     
-    # Check if r is in the valid range
-    if not (1 <= sig_r < p):
+    # Check if r and s is in the valid range
+    if not (1 <= sig_r < p or 1 <= sig_s < p-1):
         return False
     
-    # Check if s is in the valid range
-    if not (1 <= sig_s < p-1):
-        return False
-    
-    # Calculate hash value
     hash_value = int(hashlib.sha256(dataToVerify.encode()).hexdigest(), 16) % (p-1)
-    
-    # Calculate left side: g^hash mod p
     left_side = pow(g, hash_value, p)
-    
-    # Calculate right side: (y^r * r^s) mod p
     right_side = (pow(y, sig_r, p) * pow(sig_r, sig_s, p)) % p
     
-    print(f"Hash: {hash_value}, g^hash mod p: {left_side}, y^r * r^s mod p: {right_side}")
-    print(f"p: {p}, g: {g}, y: {y}, r: {sig_r}, s: {sig_s}")
+    #print(f"Hash: {hash_value}, g^hash mod p: {left_side}, y^r * r^s mod p: {right_side}")
+    #print(f"p: {p}, g: {g}, y: {y}, r: {sig_r}, s: {sig_s}")
     
     return left_side == right_side
 
+def encrypt_with_aes(data, key):
+
+    if isinstance(key, int):
+        key_bytes = key.to_bytes(32, byteorder='big')
+    elif isinstance(key, str):
+        key_bytes = hashlib.sha256(key.encode()).digest()
+    else:
+        key_bytes = key
+        
+    if isinstance(data, str):
+        data_bytes = data.encode()
+    elif isinstance(data, int):
+        data_bytes = str(data).encode()
+    else:
+        data_bytes = data
+        
+    iv = os.urandom(16)
+    cipher = AES.new(key_bytes, AES.MODE_CBC, iv)
+    
+    padded_data = pad(data_bytes, AES.block_size)
+    encrypted_data = cipher.encrypt(padded_data)
+    
+    encrypted_payload = base64.b64encode(iv + encrypted_data).decode('utf-8')
+    return encrypted_payload, iv
+
+def generate_group_key(doctor_private_key):
+    with patients_lock:
+        if not patient_session_keys:
+            return None
+        
+        keys_str = ""
+        for patient_id, session_key in patient_session_keys.items():
+            keys_str += str(session_key)
+        
+        keys_str += str(doctor_private_key)
+        group_key = int(hashlib.sha256(keys_str.encode()).hexdigest(), 16)
+        return group_key
+
+def remove_disconnected(patients_to_remove):
+    for patient_id in patients_to_remove:
+            if patient_id in active_patients:
+                try:
+                    active_patients[patient_id]["socket"].close()
+                except:
+                    pass
+                del active_patients[patient_id]
+            if patient_id in patient_session_keys:
+                del patient_session_keys[patient_id]
+            print(f"[{utils.get_timestamp()}] Removed disconnected patient {patient_id}")
+
+def broadcast_group_key(group_key, doctor_id):
+    with patients_lock:
+        patients_to_remove = []
+        for patient_id, patient_info in active_patients.items():
+            patient_socket = patient_info["socket"]
+            session_key = patient_session_keys[patient_id]
+            
+            try:
+                encrypted_payload, _ = encrypt_with_aes(str(group_key), session_key)
+                ts = int(time.time())
+                message = f"30,{encrypted_payload},{ts},{doctor_id}"
+                patient_socket.send(message.encode())
+                print(f"[{utils.get_timestamp()}] Sent encrypted group key to patient {patient_id}")
+            except Exception as e:
+                print(f"[{utils.get_timestamp()}] Error sending group key to patient {patient_id}: {e}")
+                patients_to_remove.append(patient_id)
+        
+        remove_disconnected(patients_to_remove)
+        
+
+def broadcast_message(message, group_key, doctor_id):
+    ts = int(time.time())
+    message_with_ts = f"{ts},{doctor_id},{message}"
+
+    encrypted_payload, _ = encrypt_with_aes(message_with_ts, group_key)
+    broadcast_msg = f"40,{encrypted_payload},{ts},{doctor_id}"
+    
+    with patients_lock:
+        patients_to_remove = []
+        for patient_id, patient_info in active_patients.items():
+            patient_socket = patient_info["socket"]
+            try:
+                patient_socket.send(broadcast_msg.encode())
+                print(f"[{utils.get_timestamp()}] Broadcasted encrypted message to patient {patient_id}")
+            except Exception as e:
+                print(f"[{utils.get_timestamp()}] Error broadcasting to patient {patient_id}: {e}")
+                patients_to_remove.append(patient_id)
+
+        remove_disconnected(patients_to_remove)
+
+
+def disconnect_all_patients():
+    with patients_lock:
+        for patient_id, patient_info in active_patients.items():
+            patient_socket = patient_info["socket"]
+            try:
+                patient_socket.send("60".encode())
+                patient_socket.close()
+                print(f"[{utils.get_timestamp()}] Disconnected patient {patient_id}")
+            except Exception as e:
+                print(f"[{utils.get_timestamp()}] Error disconnecting patient {patient_id}: {e}")
+        
+        active_patients.clear()
+        patient_session_keys.clear()
 
 def handle_patient(patient_socket, addr, doctor_public_key, doctor_private_key, doctor_id):
+    patient_id = None
+    patient_public_key = None
+    
     try:
-        print(f"[{get_timestamp()}] Connected to patient at {addr}")
+        print(f"[{utils.get_timestamp()}] Connected to patient at {addr}")
         
-        # Send doctor's public key to patient
         p_doctor, g_doctor, y_doctor = doctor_public_key
         patient_socket.send(f"{p_doctor},{g_doctor},{y_doctor}".encode())
-        print(f"[{get_timestamp()}] Sent doctor's public key to patient")
-        print(f"[{get_timestamp()}] Doctor's public key: p={p_doctor}, g={g_doctor}, y={y_doctor}")
-        print("Doctor's p, g, y to the patient, this public key of doctors will be used by the patient for authentication request sending in phase 2")
         
-        # Receive patient's public key
-        patient_data = patient_socket.recv(4096).decode()
+        patient_data = patient_socket.recv(4096).decode() #Do I need this 4096 B limit ?
         p_patient, g_patient, y_patient, patient_id = map(int, patient_data.split(","))
         patient_public_key = (p_patient, g_patient, y_patient)
-        print(f"[{get_timestamp()}] Received Patient's Public Key: p={p_patient}, g={g_patient}, y={y_patient}")
          
-
-        
-        #Phase 2 doctor, here we go
-
-
         auth_req = patient_socket.recv(4096).decode()
         auth_split = auth_req.split(',')
         opcode = auth_split[0]
 
-        if(opcode == "10"):
+        if(opcode == "10"): 
             TS_i = int(auth_split[1])
             RN_i = int(auth_split[2])
             ID_GWN = auth_split[3]
@@ -159,31 +212,32 @@ def handle_patient(patient_socket, addr, doctor_public_key, doctor_private_key, 
 
             if(ID_GWN != doctor_id):
                 print(f"Fake patient. Expected id: {doctor_id}, Got {ID_GWN}")
-                #Have to do something about it (break connection with patient)
-            
-            current_time = int(time.time())
-            if abs(current_time - TS_i) > 5:  # 30 seconds tolerance
-                print(f"[{get_timestamp()}] Timestamp verification failed")
                 patient_socket.send("FAILED".encode())
                 return
-            signature = (sig_r, sig_s)
+            
+            current_time = int(time.time())
+            if abs(current_time - TS_i) > TIMESTAMP_TOLERANCE:  
+                print(f"[{utils.get_timestamp()}] Timestamp verification failed")
+                patient_socket.send("FAILED".encode())
+                return
+                
+            signature = (sig_r, sig_s) 
             data_to_verify = f"{TS_i},{RN_i},{ID_GWN},{enc_key_c1},{enc_key_c2}"
 
-            if verification(data_to_verify, patient_public_key, signature) == True:
-                print("Good patient")
-                print("OPCODE 10")
+            if verification(data_to_verify, patient_public_key, signature):# This is where I verify the signed data from patient.
+                print(f"[{utils.get_timestamp()}] Patient {patient_id} authenticated successfully")
             else:
-                print("Bad patient - Signature verification failed")
-                #patient_socket.send("FAILED".encode())
+                print(f"[{utils.get_timestamp()}] Bad patient - Signature verification failed")
+                patient_socket.send("FAILED".encode())
                 return
             
             encrypted_key = (enc_key_c1, enc_key_c2)
             K_Di_GWN = decrypt_session_key(encrypted_key, doctor_private_key, p_doctor)
-            print(f"[{get_timestamp()}] Decrypted session key from patient: {K_Di_GWN}")
+            print(f"[{utils.get_timestamp()}] Decrypted session key from patient: {K_Di_GWN}")
 
             TS_GWN = int(time.time())
             RN_GWN = random.randint(1, 2**64)
-            id = auth_split[3]  # This should match what the patient is using 
+            id = patient_id  
 
             re_encrypted_key = encrypt_session_key(K_Di_GWN, patient_public_key)
 
@@ -192,9 +246,8 @@ def handle_patient(patient_socket, addr, doctor_public_key, doctor_private_key, 
             
             response = f"10,{TS_GWN},{RN_GWN},{id},{re_encrypted_key[0]},{re_encrypted_key[1]},{doctor_signature[0]},{doctor_signature[1]}"
             patient_socket.send(response.encode())
-            print(f"[{get_timestamp()}] Sent authentication response to patient")
-
-
+            print(f"[{utils.get_timestamp()}] Sent authentication response to patient {patient_id}")
+            #ACTUALLY THE PLACE WHERE OPCODE 10 SHOULD BE AS PER THE PATIENT CODE. 
             verification_msg = patient_socket.recv(4096).decode()
             verification_parts = verification_msg.split(',')
 
@@ -204,41 +257,87 @@ def handle_patient(patient_socket, addr, doctor_public_key, doctor_private_key, 
 
                 current_time = int(time.time())
                 if abs(current_time - tsi_new) > 5:  # 5 seconds tolerance
-                    print(f"[{get_timestamp()}] Timestamp verification failed for session key verification")
-                    #patient_socket.send("FAILED".encode())
+                    print(f"[{utils.get_timestamp()}] Timestamp verification failed for session key verification")
                     return
 
                 session_key_unhashed = int(hashlib.sha256(f"{K_Di_GWN},{TS_i},{TS_GWN},{RN_i},{RN_GWN},{patient_id},{doctor_id}".encode()).hexdigest(), 16)
                 session_key_hashed = int(hashlib.sha256(f"{session_key_unhashed},{tsi_new}".encode()).hexdigest(), 16)  
 
                 if session_key_hashed == session_key_recv:
-                    print("Session key verification done")
-                    #This is utterly pointless
-                    print("OPCODE: 20")  
+                    print(f"[{utils.get_timestamp()}] Session key verification successful for patient {patient_id}")
+                    print("OPCODE 20 : SESSION_TOKEN") #YES ! THIS IS CORRECT
+                    
+                    with patients_lock:
+                        patient_session_keys[patient_id] = session_key_unhashed
+                        active_patients[patient_id] = {
+                            "socket": patient_socket, 
+                            "public_key": patient_public_key,
+                            "addr": addr
+                        }
+                        
+                    print(f"[{utils.get_timestamp()}] Patient {patient_id} added to the system")
                 else:
-                    print("Bad Patient -- session key not matched")
+                    print(f"[{utils.get_timestamp()}] Bad Patient {patient_id} -- session key not matched")
+                    return
             else:
-                print("Invalid Opcode. Expected: 20. Got Opcode")
+                print(f"[{utils.get_timestamp()}] Invalid Opcode. Expected: 20. Got: {verification_parts[0]}")
         else:
-            print("Invalid Opcode. Expected: 10 ")
+            print(f"[{utils.get_timestamp()}] Invalid Opcode. Expected: 10. Got: {opcode}")
+            return
+            
+        while True:
+            try:
+                data = patient_socket.recv(4096).decode()
+                if not data:
+                    break
+                    
+                parts = data.split(',')
+                opcode = parts[0]
+                
+                if opcode == "60":  # DISCONNECT
+                    print(f"[{utils.get_timestamp()}] Patient {patient_id} requested disconnect")
+                    break
+                    
+                
+            except (ConnectionResetError, ConnectionAbortedError):
+                print(f"[{utils.get_timestamp()}] Connection with patient {patient_id} lost")
+                break
+            except Exception as e:
+                print(f"[{utils.get_timestamp()}] Error in patient {patient_id} communication: {e}")
+                break
+                
     except Exception as e:
-        print(f"[{get_timestamp()}] Error: {e}")
+        print(f"[{utils.get_timestamp()}] Error handling patient at {addr}: {e}")
     
     finally:
-        patient_socket.close()
-        print(f"[{get_timestamp()}] Connection with patient {addr} closed")
+        if patient_id:
+            with patients_lock:
+                if patient_id in active_patients:
+                    del active_patients[patient_id]
+                if patient_id in patient_session_keys:
+                    del patient_session_keys[patient_id]
+                    
+        try:
+            patient_socket.close()
+        except:
+            pass
+            
+        print(f"[{utils.get_timestamp()}] Connection with patient {patient_id if patient_id else addr} closed")
 
 def start_doctor_server(doctor_id):
-    # Generate Doctor's ElGamal key pair (to be used for authentication in phase 2)
     doctor_public_key, doctor_private_key = generate_elgamal_keys()
     p, g, y = doctor_public_key
-    print(f"[{get_timestamp()}] Doctor's Public Key: p={p}, g={g}, y={y}")
-    print(f"[{get_timestamp()}] Doctor's Private Key: x={doctor_private_key}")
+    #print(f"[{utils.get_timestamp()}] Doctor's Public Key: \np={p} \ng={g} \ny={y}")
+    #print(f"[{utils.get_timestamp()}] Doctor's Private Key: \nx={doctor_private_key}")
     
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((HOST, PORT))
     server_socket.listen(5)
-    print(f"[{get_timestamp()}] Doctor server started at {HOST}:{PORT}")
+    print(f"[{utils.get_timestamp()}] Doctor server started at {HOST}:{PORT}")
+
+    doctor_thread = threading.Thread(target=doctor_command_handler, args=(doctor_public_key, doctor_private_key, doctor_id))
+    doctor_thread.daemon = True 
+    doctor_thread.start()
 
     try:
         while True:
@@ -248,15 +347,70 @@ def start_doctor_server(doctor_id):
                 args=(patient_socket, addr, doctor_public_key, doctor_private_key, doctor_id)
             ).start()
     except KeyboardInterrupt:
-        print(f"[{get_timestamp()}] Server shutting down...")
+        print(f"[{utils.get_timestamp()}] Server shutting down...")
     finally:
+        disconnect_all_patients()
         server_socket.close()
 
+def doctor_command_handler(doctor_public_key, doctor_private_key, doctor_id):    
+    while True:
+        try:
+            print("\n--- Doctor Command Interface ---")
+            print("1: List connected patients")
+            print("2: Broadcast message to all patients")
+            print("3: Disconnect all patients")
+            print("4: Exit server")
+            command = input("\nEnter command: ")
+            
+            if command == "1":
+                with patients_lock:
+                    if not active_patients:
+                        print("No patients connected")
+                    else:
+                        print(f"Connected patients ({len(active_patients)}):")
+                        for patient_id in active_patients:
+                            print(f"- Patient ID: {patient_id}")
+            
+            elif command == "2":  
+                with patients_lock:
+                    if not active_patients:
+                        print("No patients connected. Cannot broadcast message.")
+                        continue
+                
+                message = input("Enter message to broadcast: ")
+                
+                group_key = generate_group_key(doctor_private_key)
+                if not group_key:
+                    print("Failed to generate group key for broadcast")
+                    continue
+                
+            
+                broadcast_group_key(group_key, doctor_id)
+                
+                broadcast_message(message, group_key, doctor_id)
+                print("OPCODE 40 : ENC_MSG")
+                print(f"Message broadcasted to {len(active_patients)} patients")
+            
+            elif command == "3":  
+                disconnect_all_patients()
+                print("All patients disconnected")
+            
+            elif command == "4":  
+                print("Exiting server...")
+                disconnect_all_patients()
+                os._exit(0) 
+            
+            else:
+                print("Invalid command")
+                
+        except Exception as e:
+            print(f"Error processing command: {e}")
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Telemedical Doctor Server')
-    parser.add_argument('--id', type=str, default="1", help='Doctor ID (default: 1)')
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--id', type=str, default="1")
     args = parser.parse_args()
+
     doctor_id = args.id
 
     start_doctor_server(doctor_id)

@@ -1,3 +1,5 @@
+import base64
+import os
 import socket
 import random
 import time 
@@ -5,27 +7,16 @@ import hashlib
 from cryptography.hazmat.primitives.asymmetric import dh
 from math import gcd
 import argparse
+import threading
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+import utils
 
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 9000
 
-# Generate a large prime p and find a generator g in Z*_p
-def generate_prime_and_generator():
-    parameters = dh.generate_parameters(generator=2, key_size=512)
-    p = parameters.parameter_numbers().p  # Large prime
-    g = find_generator(p)  # Find a valid generator g
-    return p, g
-
-# Find a valid generator g in Z*_p
-def find_generator(p):
-    for g in range(2, p - 1):
-        if pow(g, (p - 1) // 2, p) != 1:  # Basic check for primitive root
-            return g
-    return 2  # Fallback
-
-# Generate ElGamal key pair (p, g, y) and private key x
 def generate_elgamal_keys():
-    p, g = generate_prime_and_generator()
+    p, g = utils.get_prime_and_generator()
     x = random.randint(2, p - 2)  # Private key
     y = pow(g, x, p)  # Public key
     return (p, g, y), x  # Public key tuple (p, g, y) and private key x
@@ -33,40 +24,68 @@ def generate_elgamal_keys():
 # Decrypt session key using patient's private key
 def decrypt_session_key(cipher_msg, key, p):
     c1, c2 = cipher_msg
-    
-    # Compute s = c1^x mod p
     s = pow(c1, key, p)
-    
-    # Compute s^(-1) mod p (modular inverse)
-    s_inv = pow(s, p - 2, p)  # Using Fermat's little theorem for modular inverse
-    
-    # Recover the session key
+    s_inv = pow(s, p - 2, p)  
     session_key = (c2 * s_inv) % p
     
     return session_key
 
-
-def encrypt_session_key(msg, key):
+def encrypt_session_key(msg, key): #T
     p, g, y = key
     
-    # Convert message to integer if it's bytes
     if isinstance(msg, bytes):
         msg = int.from_bytes(msg, byteorder='big')
     
-    # Choose a random ephemeral key k
     k = random.randint(2, p - 2)       
     
-    # Compute ciphertext
     c1 = pow(g, k, p)
     c2 = (msg * pow(y, k, p)) % p
     
     return c1, c2
 
+def decrypt_with_aes(encrypted_payload, key):
+    """
+    Decrypt data that was encrypted using AES-CBC with the provided key.
+    
+    Parameters:
+    encrypted_payload (str): Base64 encoded string containing IV + encrypted data
+    key (int/str/bytes): The decryption key
+    
+    Returns:
+    str: Decrypted data as a string
+    """
+    try:
+        # Convert key to bytes if needed
+        if isinstance(key, int):
+            key_bytes = key.to_bytes(32, byteorder='big')
+        elif isinstance(key, str):
+            key_bytes = hashlib.sha256(key.encode()).digest()
+        else:
+            # Assume it's already bytes
+            key_bytes = key
+            
+        # Decode base64 payload
+        decoded_payload = base64.b64decode(encrypted_payload)
+        
+        # Extract IV (first 16 bytes) and ciphertext
+        iv = decoded_payload[:16]
+        ciphertext = decoded_payload[16:]
+        
+        # Create cipher and decrypt
+        cipher = AES.new(key_bytes, AES.MODE_CBC, iv)
+        decrypted_padded = cipher.decrypt(ciphertext)
+        
+        # Unpad and return as string
+        decrypted_data = unpad(decrypted_padded, AES.block_size)
+        
+        return decrypted_data.decode('utf-8')
+    except Exception as e:
+        print(f"Decryption error: {e}")
+        return None
 
-#WRTING CODE FOR PHASE 2
-
+# Generate authentication message for Phase 2
 def generate_authMessage(patient_kr, doctor_ku, pid, did, patient_ku):
-    K_di_gwn = random.randint(1, 2**128)
+    K_di_gwn = random.randint(1, 2**128) #This is the session key
     E_ku_gwn = encrypt_session_key(K_di_gwn, doctor_ku)
 
     tsi = int(time.time())
@@ -78,43 +97,26 @@ def generate_authMessage(patient_kr, doctor_ku, pid, did, patient_ku):
     signdata = sign_data(data, patient_kr, patient_ku)
 
     auth_request = {
-        "TS_i" : tsi,
-        "RN_i" : rni,
-        "ID_GWN" : did,
+        "TS_i": tsi,
+        "RN_i": rni,
+        "ID_GWN": did,
         "encrypted_key": E_ku_gwn,
-        "signature" : signdata
+        "signature": signdata
     }
 
     return auth_request, K_di_gwn
 
 def sign_data(data, private_key, public_key):
     p, g, y = public_key
-    
     hash_value = int(hashlib.sha256(data.encode()).hexdigest(), 16) % (p-1)
-    print(f"Hash (patient): {hash_value}")
-    
-    # Choose a random k that is coprime to p-1
-    k = find_coprime(p-1)
-    
-    # Calculate r = g^k mod p
+    k = utils.find_coprime(p-1)
     r = pow(g, k, p)
-    
-    # Calculate s = k^-1 * (hash - x*r) mod (p-1)
-    k_inv = pow(k, -1, p-1)  # Using Python 3.8+ m  odular inverse calculation
+    k_inv = pow(k, -1, p-1) 
     s = (k_inv * (hash_value - private_key * r) % (p-1)) % (p-1)
     
     return (r, s)
 
-def mod_inverse(k, p_minus_1):
-    """Computes modular inverse using Extended Euclidean Algorithm"""
-    return pow(k, p_minus_1 - 2, p_minus_1)  # Only works if p-1 is prime
 
-def find_coprime(n):
-    """Finds a random integer k that is coprime to n"""
-    while True:
-        k = random.randint(2, n-1)
-        if gcd(k, n) == 1:
-            return k
 
 def verification(dataToVerify, public_key, sgndata):
     p, g, y = public_key
@@ -129,125 +131,250 @@ def verification(dataToVerify, public_key, sgndata):
     hash_value = int(hashlib.sha256(dataToVerify.encode()).hexdigest(), 16) % (p-1)
 
     left_side = pow(g, hash_value, p)
-    
     right_side = (pow(y, sig_r, p) * pow(sig_r, sig_s, p)) % p
-    
-    print(f"Hash: {hash_value}, g^hash mod p: {left_side}, y^r * r^s mod p: {right_side}")
-    print(f"p: {p}, g: {g}, y: {y}, r: {sig_r}, s: {sig_s}")
-    
+
     return left_side == right_side
 
-
-
-
+def receive_messages(patient_socket, session_key, doctor_id, patient_id, doctor_public_key, patient_private_key, p):
+    group_key = None
     
+    try:
+        while True:
+            try:
+                data = patient_socket.recv(4096).decode()
+                if not data:
+                    print(f"[{utils.get_timestamp()}] Connection closed by doctor")
+                    break
+                
+                parts = data.split(',')
+                opcode = parts[0]
+                
+                if opcode == "30":  # GROUP KEY
+                    try:
+                        encrypted_payload = parts[1]                        
+                            
+                        decrypted_group_key = decrypt_with_aes(encrypted_payload, session_key)
+                        if decrypted_group_key:
+                            group_key = int(decrypted_group_key)
+                            print(f"[{utils.get_timestamp()}] Received group key from doctor: {group_key}")
+                            print("OPCODE 30 : GROUP KEY (SUCCESS)")
+                        else:
+                            print(f"[{utils.get_timestamp()}] Failed to decrypt group key")
+                    except Exception as e:
+                        print(f"[{utils.get_timestamp()}] Error processing group key: {e}")
+                
+                
+                elif opcode == "40":  # ENCRYPTED MESSAGE
+                    if not group_key:
+                        print(f"[{utils.get_timestamp()}] Received encrypted message but no group key available")
+                        continue
+                    
+                    encrypted_payload = parts[1]
+                    ts = int(parts[2])
+                    sender_id = parts[3]
+                    
+                    current_time = int(time.time())
+                    if abs(current_time - ts) > 5: # 5 seconds tolerance
+                        print(f"[{utils.get_timestamp()}] Message timestamp too old, discarding")
+                        continue
+                    
+                    try:
+                        if isinstance(group_key, int):
+                            key_bytes = group_key.to_bytes(32, byteorder='big')
+                        elif isinstance(group_key, str):
+                            key_bytes = bytes.fromhex(group_key) if len(group_key) == 64 else hashlib.sha256(group_key.encode()).digest()
+                        else:
+                            key_bytes = group_key
+                        
+                        encrypted_data = base64.b64decode(encrypted_payload)
+                        
+                        iv = encrypted_data[:16]
+                        ciphertext = encrypted_data[16:]
+                        
+                        cipher = AES.new(key_bytes, AES.MODE_CBC, iv)
+                        
+                        decrypted_data = unpad(cipher.decrypt(ciphertext), AES.block_size)
+                        
+                        decrypted_message = decrypted_data.decode('utf-8')
+                        
+                        message_parts = decrypted_message.split(',', 2)
+                        message_ts = int(message_parts[0])
+                        message_sender = message_parts[1]
+                        actual_message = message_parts[2]
+                        
+                        if message_ts != ts or message_sender != sender_id:
+                            print(f"[{utils.get_timestamp()}] Message verification failed: timestamp or sender mismatch")
+                            continue
+                        
+                        print(f"[{utils.get_timestamp()}] Received broadcast message from Doctor {sender_id}")
+                        print(f"[{utils.get_timestamp()}] Decrypted message: {actual_message}")
+                        print("OPCODE 50 : DEC MSG")
+                        print(f"[{utils.get_timestamp()}] Message received and verified")
+                    
+                    except Exception as e:
+                        print(f"[{utils.get_timestamp()}] Error decrypting message: {e}")
+                
+                elif opcode == "60": 
+                    print("OPCODE 60 : DISCONNECT")
+                    break
+                    
+                else:
+                    print(f"[{utils.get_timestamp()}] Unknown opcode received: {opcode}")
+                
+            except (ConnectionResetError, ConnectionAbortedError):
+                print(f"[{utils.get_timestamp()}] Connection lost with doctor")
+                break
+            except Exception as e:
+                print(f"[{utils.get_timestamp()}] Error receiving message: {e}")
+                
+    except Exception as e:
+        print(f"[{utils.get_timestamp()}] Error in message receiver: {e}")
+    finally:
+        print(f"[{utils.get_timestamp()}] Message receiver thread ending")
+        os._exit(0)
 
 def main(patient_id, doctor_id):
     try:
         patient_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         patient_socket.connect((SERVER_HOST, SERVER_PORT))
-        print(f"[Patient] Connected to doctor server at {SERVER_HOST}:{SERVER_PORT}")
+        print(f"[{utils.get_timestamp()}] Connected to doctor server at {SERVER_HOST}:{SERVER_PORT}")
         
-        # Receive doctor's public key
         doctor_data = patient_socket.recv(4096).decode()
         p_doctor, g_doctor, y_doctor = map(int, doctor_data.split(","))
-        print(f"[Patient] Received Doctor's Public Key: p={p_doctor}, g={g_doctor}, y={y_doctor}")
-        print("[Patient] This doctor's public key will be used for authentication requests in phase 2")
-
-        # Generate Patient's ElGamal key pair
+        
         patient_public_key, patient_private_key = generate_elgamal_keys()
         p, g, y = patient_public_key
-        print(f"[Patient] Generated keys - Public Key: p={p}, g={g}, y={y}")
-        print(f"[Patient] Private Key: x={patient_private_key}")
+        #print(f"[{utils.get_timestamp()}] Generated keys - Public Key: \np={p} \ng={g} \ny={y}")
+        #print(f"[{utils.get_timestamp()}] Private Key: \n{patient_private_key}")
 
-        # Send public key to doctor
         patient_socket.send(f"{p},{g},{y},{patient_id}".encode())
-        print(f"[Patient] Sent public key to doctor")
-
-        # Store doctor's public key for future use (phase 2)
+        
         doctor_public_key = (p_doctor, g_doctor, y_doctor)
 
-
-
-        auth_request, k_di_gwn = generate_authMessage(patient_private_key, doctor_public_key, patient_id, doctor_id, patient_public_key)
-
-        auth_msg = f"10,{auth_request['TS_i']},{auth_request['RN_i']},{auth_request['ID_GWN']},{auth_request['encrypted_key'][0]},{auth_request['encrypted_key'][1]},{auth_request['signature'][0]},{auth_request['signature'][1]}"
-
-        patient_socket.send(auth_msg.encode())
-        print(f"Sent authetication code to doctor")
-
-        #this is utterly pointless
-        print("OPCODE: 10")
-
-        #waitint for doctor's authetication code... (with blocking call)
-
-        doctor_resp = patient_socket.recv(4096).decode()
-        resp_split = doctor_resp.split(',')
-        opcode = resp_split[0]
-
-        
-        if opcode == "10":
-
-            tsg = int(resp_split[1])
-            rng = int(resp_split[2])
-            did = resp_split[3]
-            enc_key_c1 = int(resp_split[4])
-            enc_key_c2 = int(resp_split[5])
-            sig_r = int(resp_split[6])
-            sig_s = int(resp_split[7])
-
-            curr_time = int(time.time())
-            if abs(curr_time - tsg) > 5:
-                print("Timestamp could not be verified: ")
-                exit(1)
-            
-            sgndata2 = (sig_r, sig_s)
-            dataInsideSig = f"{tsg},{rng},{did},{enc_key_c1},{enc_key_c2}"
-
-            if verification(dataInsideSig, doctor_public_key, sgndata2) == True:
-                print("Doctor's authentication code successful")
-            else:
-                print("Doctor's code could not be verified")
-                exit(0)
-
-            keyrecv = (enc_key_c1, enc_key_c2)
-            k_di_gwn_recv = decrypt_session_key(keyrecv, patient_private_key, p)
-
-            if(k_di_gwn_recv == k_di_gwn):
-                print("I got the key I sent")
-            else:
-                print("Fake doctor")
-                exit(0)
-
-            session_key_unhashed = int(hashlib.sha256(f"{k_di_gwn},{auth_request['TS_i']},{tsg},{auth_request['RN_i']},{rng},{patient_id},{doctor_id}".encode()).hexdigest(), 16)
-            tsi_new = int(time.time())
-
-            session_key_hashed = int(hashlib.sha256(f"{session_key_unhashed},{tsi_new}".encode()).hexdigest(), 16)
-
-            sk_to_send = f"20,{session_key_hashed},{tsi_new}"
-            patient_socket.send(sk_to_send.encode())
-
-
-            print(f"Sent session code to doctor")
-            #this is utterly pointless 2
-            print("OPCODE: 20")
-
-            
-        else:
-            print("Different Opcode Received. Is that even possible?" + opcode)
-
-
-    except Exception as e:
-        print(f"[Patient] Error: {e}")
+        auth_request, K_di_gwn = generate_authMessage(patient_private_key, doctor_public_key, patient_id, doctor_id, patient_public_key)
     
+        auth_msg = f"10,{auth_request['TS_i']},{auth_request['RN_i']},{auth_request['ID_GWN']},{auth_request['encrypted_key'][0]},{auth_request['encrypted_key'][1]},{auth_request['signature'][0]},{auth_request['signature'][1]}"
+        patient_socket.send(auth_msg.encode())
+         
+        auth_response = patient_socket.recv(4096).decode() #At this point session key has been exchanged.
+        
+        if auth_response == "FAILED": 
+            print("OPCODE 10 : KEY_VERIFICATION (FAILED)")
+            patient_socket.close()
+            return
+            
+        response_parts = auth_response.split(',')
+        opcode = response_parts[0]
+        if opcode == "10":
+            TS_GWN = int(response_parts[1])
+            RN_GWN = int(response_parts[2])
+            id_received = int(response_parts[3])
+            enc_key_c1 = int(response_parts[4])
+            enc_key_c2 = int(response_parts[5])
+            sig_r = int(response_parts[6])
+            sig_s = int(response_parts[7])
+            
+            # Verify timestamp
+            current_time = int(time.time())
+            if abs(current_time - TS_GWN) > 5:  # 5 seconds tolerance
+                print(f"[{utils.get_timestamp()}] Timestamp verification failed")
+                patient_socket.close()
+                return
+                
+            # Verify patient ID
+            if id_received != patient_id:
+                print(f"[{utils.get_timestamp()}] ID verification failed. Expected: {patient_id}, Got: {id_received}")
+                patient_socket.close()
+                return
+                
+            # Verify signature
+            signature = (sig_r, sig_s)
+            data_to_verify = f"{TS_GWN},{RN_GWN},{id_received},{enc_key_c1},{enc_key_c2}"
+            
+            if verification(data_to_verify, doctor_public_key, signature): 
+                print(f"[{utils.get_timestamp()}] Doctor authenticated successfully")
+            else:
+                print(f"[{utils.get_timestamp()}] Doctor signature verification failed")
+                patient_socket.close()
+                return
+                
+            # Decrypt session key
+            encrypted_key = (enc_key_c1, enc_key_c2)
+            decrypted_key = decrypt_session_key(encrypted_key, patient_private_key, p)
+            print(f"[{utils.get_timestamp()}] Decrypted session key from doctor: {decrypted_key}")
+            
+            # Verify decrypted key matches K_di_gwn ? This is not written in the doc !!
+            if decrypted_key == K_di_gwn: 
+                print(f"[{utils.get_timestamp()}] Session key verification successful") # Is this where they verify?
+                print("OPCODE 10 : KEY_VERIFICATION (SUCCESS)")
+            else:
+                print("OPCODE 10 : KEY_VERIFICATION (FAILED)")
+                patient_socket.close()
+                return
+            
+            # Calculate shared session key (token)
+            TS_i = auth_request['TS_i']
+            RN_i = auth_request['RN_i']
+            session_key_unhashed = int(hashlib.sha256(f"{K_di_gwn},{TS_i},{TS_GWN},{RN_i},{RN_GWN},{patient_id},{doctor_id}".encode()).hexdigest(), 16)
+            
+            # Send session key verification
+            tsi_new = int(time.time())
+            session_key_hashed = int(hashlib.sha256(f"{session_key_unhashed},{tsi_new}".encode()).hexdigest(), 16)
+            
+            verification_msg = f"20,{session_key_hashed},{tsi_new}"
+            patient_socket.send(verification_msg.encode())
+            print(f"[{utils.get_timestamp()}] Sent shared session key to verification to doctor")
+            print("OPCODE 20 : SESSION_TOKEN (SUCCESS)")
+            
+            receiver_thread = threading.Thread(
+                target=receive_messages, 
+                args=(patient_socket, session_key_unhashed, doctor_id, patient_id, doctor_public_key, patient_private_key, p)
+            )
+            receiver_thread.daemon = True
+            receiver_thread.start()
+            
+            print("\n--- Patient Command Interface ---")
+            print("Available commands:")
+            print("1: Send disconnect request")
+            print("2: Exit client")
+            
+            while True:
+                try:
+                    command = input("\nEnter command: ")
+                    
+                    if command == "1":
+                        patient_socket.send("60".encode())
+                        print(f"[{utils.get_timestamp()}] Sent disconnect request to doctor")
+                        break
+                        
+                    elif command == "2":
+                        print(f"[{utils.get_timestamp()}] Exiting client...")
+                        patient_socket.close()
+                        break
+                        
+                    else:
+                        print("Invalid command")
+                        
+                except Exception as e:
+                    print(f"Error processing command: {e}")
+                    break
+        else:
+            print(f"[{utils.get_timestamp()}] Invalid opcode in authentication response. Expected: 10, Got: {opcode}")
+            patient_socket.close()
+            
+    except Exception as e:
+        print(f"[{utils.get_timestamp()}] Error in main patient thread: {e}")
     finally:
-        patient_socket.close()
-        print(f"[Patient] Connection closed")
+        try:
+            patient_socket.close()
+        except:
+            pass
+        print(f"[{utils.get_timestamp()}] Patient client terminated")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Telemedical Patient Client')
-    parser.add_argument('--patient-id', type=str, default="1", help='Patient ID (default: 1)')
-    parser.add_argument('--doctor-id', type=str, default="1", help='Doctor ID to connect to (default: 1)')
+    parser.add_argument('--patient_id', type=int, default=101, help='Patient ID (default: 101)')
+    parser.add_argument('--doctor_id', type=str, default="1", help='Doctor ID (default: 1)')
     
     args = parser.parse_args()
     
