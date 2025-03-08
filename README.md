@@ -68,16 +68,12 @@ The system uses the following opcodes to manage communication:
 
 The implementation measures execution time for various cryptographic primitives:
 
-| Operation | Average Time (ms) |
+| Operation | Average Time (s) |
 |-----------|------------------|
-| ElGamal Key Generation | 95.3 |
-| ElGamal Encryption | 12.7 |
-| ElGamal Decryption | 8.5 |
-| ElGamal Signature | 10.2 |
-| ElGamal Verification | 14.8 |
-| AES-256 Encryption | 0.9 |
-| AES-256 Decryption | 0.8 |
-| Hash Computation (SHA-256) | 0.3 |
+| ElGamal Key Generation | 0.053737 |
+| AES-256 Encryption | 0.002555 |
+| AES-256 Decryption | 0.000337 |
+| Broadcast Message | 0.000845 |
 
 ## Setup and Usage Instructions
 
