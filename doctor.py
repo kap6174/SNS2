@@ -18,7 +18,7 @@ patient_session_keys = {}
 active_patients = {}
 patients_lock = threading.Lock()
 
-
+@utils.measure_time(label="El Gamal Key Generation")
 def generate_elgamal_keys():
     p, g = utils.get_prime_and_generator()
     x = random.randint(2, p - 2) 
@@ -71,7 +71,6 @@ def verification(dataToVerify, public_key, sgndata):
     return left_side == right_side
 
 def encrypt_with_aes(data, key):
-
     if isinstance(key, int):
         key_bytes = key.to_bytes(32, byteorder='big')
     elif isinstance(key, str):
@@ -362,26 +361,28 @@ def doctor_command_handler(doctor_public_key, doctor_private_key, doctor_id):
                         print(f"Connected patients ({len(active_patients)}):")
                         for patient_id in active_patients:
                             print(f"- Patient ID: {patient_id}")
-            
-            elif command == "2":  
-                with patients_lock:
-                    if not active_patients:
-                        print("No patients connected. Cannot broadcast message.")
-                        continue
-                
+
+            elif command == "2":
                 message = input("Enter message to broadcast: ")
+                with utils.Timer("Broadcast Message"):   
+                    with patients_lock:
+                        if not active_patients:
+                            print("No patients connected. Cannot broadcast message.")
+                            continue
+                    
+                    
+                    
+                    group_key = generate_group_key(doctor_private_key)
+                    if not group_key:
+                        print("Failed to generate group key for broadcast")
+                        continue
+                    
                 
-                group_key = generate_group_key(doctor_private_key)
-                if not group_key:
-                    print("Failed to generate group key for broadcast")
-                    continue
-                
-            
-                broadcast_group_key(group_key, doctor_id)
-                
-                broadcast_message(message, group_key, doctor_id)
-                print("OPCODE 40 : ENC_MSG")
-                print(f"Message broadcasted to {len(active_patients)} patients")
+                    broadcast_group_key(group_key, doctor_id)
+                    
+                    broadcast_message(message, group_key, doctor_id)
+                    print("OPCODE 40 : ENC_MSG")
+                    print(f"Message broadcasted to {len(active_patients)} patients")
             
             elif command == "3":  
                 disconnect_all_patients()

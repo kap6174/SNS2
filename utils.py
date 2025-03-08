@@ -1,15 +1,10 @@
-import base64
 import datetime
-import socket
 import random
 import time 
-import hashlib 
 from cryptography.hazmat.primitives.asymmetric import dh
 from math import gcd
-import argparse
-import threading
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
+import time
+import functools
 
 
 def get_prime_and_generator():
@@ -36,3 +31,34 @@ def find_coprime(n):
 def get_timestamp():
     return datetime.datetime.now().strftime("%H:%M:%S")
 
+
+def measure_time(func=None, *, label=None):
+    if func is None:
+        return lambda f: measure_time(f, label=label)
+    
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        
+        operation_name = label or func.__name__
+        print(f"[TIMER] {operation_name} took {end_time - start_time:.6f} seconds")
+        
+        return result
+    
+    return wrapper
+
+
+class Timer:
+    def __init__(self, label="Operation"):
+        self.label = label
+        
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+        
+    def __exit__(self, *args):
+        self.end_time = time.time()
+        self.execution_time = self.end_time - self.start_time
+        print(f"[TIMER] {self.label} took {self.execution_time:.6f} seconds")

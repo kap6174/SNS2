@@ -149,33 +149,34 @@ def receive_messages(patient_socket, session_key, doctor_id, patient_id, doctor_
                 
 
                 elif opcode == "40":  # ENCRYPTED MESSAGE
-                    if not group_key:
-                        print(f"[{utils.get_timestamp()}] Received encrypted message but no group key available")
-                        continue
-                    
-                    encrypted_payload = parts[1]
-                    ts = int(parts[2])
-                    sender_id = parts[3]
-                    
-                    current_time = int(time.time())
-                    if abs(current_time - ts) > 5: # 5 seconds tolerance
-                        print(f"[{utils.get_timestamp()}] Message timestamp too old, discarding")
-                        continue
-                    
-                    
-                    decrypted_message = decrypt_with_aes(encrypted_payload, group_key)
-                    message_parts = decrypted_message.split(',', 2)
-                    message_ts = int(message_parts[0])
-                    message_sender = message_parts[1]
-                    actual_message = message_parts[2]
+                    with utils.Timer("AES Decryption"):
+                        if not group_key:
+                            print(f"[{utils.get_timestamp()}] Received encrypted message but no group key available")
+                            continue
                         
-                    if message_ts != ts or message_sender != sender_id:
-                        print(f"[{utils.get_timestamp()}] Message verification failed: timestamp or sender mismatch")
-                        continue
+                        encrypted_payload = parts[1]
+                        ts = int(parts[2])
+                        sender_id = parts[3]
                         
-                    print(f"[{utils.get_timestamp()}] Received broadcast message from Doctor {sender_id}")
-                    print(f"[{utils.get_timestamp()}] Decrypted message: {actual_message}")
-                    print("OPCODE 50 : DEC MSG")
+                        current_time = int(time.time())
+                        if abs(current_time - ts) > 5: # 5 seconds tolerance
+                            print(f"[{utils.get_timestamp()}] Message timestamp too old, discarding")
+                            continue
+                        
+                        
+                        decrypted_message = decrypt_with_aes(encrypted_payload, group_key)
+                        message_parts = decrypted_message.split(',', 2)
+                        message_ts = int(message_parts[0])
+                        message_sender = message_parts[1]
+                        actual_message = message_parts[2]
+                            
+                        if message_ts != ts or message_sender != sender_id:
+                            print(f"[{utils.get_timestamp()}] Message verification failed: timestamp or sender mismatch")
+                            continue
+                            
+                        print(f"[{utils.get_timestamp()}] Received broadcast message from Doctor {sender_id}")
+                        print(f"[{utils.get_timestamp()}] Decrypted message: {actual_message}")
+                        print("OPCODE 50 : DEC MSG")
                 
                 elif opcode == "60": 
                     print("OPCODE 60 : DISCONNECT")
