@@ -6,8 +6,8 @@ import os
 import time
 import hashlib
 import argparse
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
+from Cryptodome.Cipher import AES
+from Cryptodome.Util.Padding import pad, unpad
 import utils
 
 HOST = '127.0.0.1'
