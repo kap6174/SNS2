@@ -72,7 +72,7 @@ def generate_authMessage(patient_kr, doctor_ku, pid, did, patient_ku):
     K_di_gwn = random.randint(1, 2**128) #This is the session key
     E_ku_gwn = encrypt_session_key(K_di_gwn, doctor_ku)
 
-    tsi = int(time.time()) 
+    tsi = int(time.time()) - 600
 
     rni = random.randint(1, 2**64)
 

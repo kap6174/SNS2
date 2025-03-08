@@ -215,7 +215,7 @@ def main(patient_id, doctor_id):
 
         auth_request, K_di_gwn = generate_authMessage(patient_private_key, doctor_public_key, patient_id, doctor_id, patient_public_key)
     
-        auth_msg = f"10,{auth_request['TS_i']},{auth_request['RN_i']},{auth_request['ID_GWN']},{auth_request['encrypted_key'][0]},{auth_request['encrypted_key'][1]},{auth_request['signature'][0]},{auth_request['signature'][1]}"
+        auth_msg = f"10,{auth_request['TS_i']},{auth_request['RN_i']},{auth_request['ID_GWN']},{auth_request['encrypted_key'][0]},{auth_request['encrypted_key'][1]},{auth_request['signature'][0]+1},{auth_request['signature'][1]}"
         patient_socket.send(auth_msg.encode())
          
         auth_response = patient_socket.recv(4096).decode() #At this point session key has been exchanged.
@@ -281,7 +281,7 @@ def main(patient_id, doctor_id):
             
             # Send session key verification
             tsi_new = int(time.time())
-            session_key_hashed = int(hashlib.sha256(f"{session_key_unhashed},{tsi_new}".encode()).hexdigest(), 16)
+            session_key_hashed = int(hashlib.sha256(f"{session_key_unhashed},{tsi_new}".encode()).hexdigest(), 16) +1 
             
             verification_msg = f"20,{session_key_hashed},{tsi_new}"
             patient_socket.send(verification_msg.encode())

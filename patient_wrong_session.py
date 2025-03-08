@@ -281,7 +281,7 @@ def main(patient_id, doctor_id):
             
             # Send session key verification
             tsi_new = int(time.time())
-            session_key_hashed = int(hashlib.sha256(f"{session_key_unhashed},{tsi_new}".encode()).hexdigest(), 16)
+            session_key_hashed = int(hashlib.sha256(f"{session_key_unhashed},{tsi_new}".encode()).hexdigest(), 16) +1 
             
             verification_msg = f"20,{session_key_hashed},{tsi_new}"
             patient_socket.send(verification_msg.encode())

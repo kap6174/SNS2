@@ -18,12 +18,12 @@ patient_session_keys = {}
 active_patients = {}
 patients_lock = threading.Lock()
 
-@utils.measure_time(label="El Gamal Key Generation")
 def generate_elgamal_keys():
     p, g = utils.get_prime_and_generator()
     x = random.randint(2, p - 2) 
     y = pow(g, x, p) 
     return (p, g, y), x  # Public key tuple (p, g, y) and private key x
+
 
 def encrypt_session_key(msg, patient_public_key):
     p, g, y = patient_public_key
@@ -70,6 +70,7 @@ def verification(dataToVerify, public_key, sgndata):
     
     return left_side == right_side
 
+@utils.measure_time(label="AES Encryption")
 def encrypt_with_aes(data, key):
     if isinstance(key, int):
         key_bytes = key.to_bytes(32, byteorder='big')
@@ -316,16 +317,15 @@ def handle_patient(patient_socket, addr, doctor_public_key, doctor_private_key, 
         print(f"[{utils.get_timestamp()}] Connection with patient {patient_id if patient_id else addr} closed")
 
 def start_doctor_server(doctor_id):
-    doctor_public_key, doctor_private_key = generate_elgamal_keys()
-    p, g, y = doctor_public_key
-    #print(f"[{utils.get_timestamp()}] Doctor's Public Key: \np={p} \ng={g} \ny={y}")
-    #print(f"[{utils.get_timestamp()}] Doctor's Private Key: \nx={doctor_private_key}")
     
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((HOST, PORT))
     server_socket.listen(5)
     print(f"[{utils.get_timestamp()}] Doctor server started at {HOST}:{PORT}")
 
+    with utils.Timer(label="El Gamal Key Generation"):
+        doctor_public_key, doctor_private_key = generate_elgamal_keys()
+        
     doctor_thread = threading.Thread(target=doctor_command_handler, args=(doctor_public_key, doctor_private_key, doctor_id))
     doctor_thread.daemon = True 
     doctor_thread.start()
